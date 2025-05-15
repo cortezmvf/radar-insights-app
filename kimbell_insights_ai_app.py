@@ -7,7 +7,7 @@ import openai
 import os
 
 # Setup
-openai.api_key = st.secrets["REDACTED"]
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 project_id = "radar-377104"
 with open("gcp_key.json", "w") as f:
     f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS"])
