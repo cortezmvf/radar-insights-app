@@ -3,3 +3,4 @@ openai
 google-cloud-bigquery
 pandas
 python-docx
+db-dtypes
