@@ -34,7 +34,7 @@ with col_a:
     selected_month = st.selectbox("Select Month", options=month_options)
 with col_b:
     metric_options = ["Impressions", "Clicks", "Sessions", "Revenue"]
-    selected_metric = st.selectbox("Select Metric", options=metric_options)
+    selected_metric = st.selectbox("Select Metric", options=metric_options, key="chart_metric_selector")
 
 # === Load Data from GBQ ===
 @st.cache_data(ttl=3600)
@@ -85,8 +85,8 @@ else:
         )
         fig_bar.update_layout(showlegend=False, yaxis_tickformat=",", height=300, margin=dict(t=0, b=20))
         st.plotly_chart(fig_bar, use_container_width=True)
-        
-    # --- GPT Analysis ---
+
+    # === Run Analysis Button ===
     if st.session_state.analysis_output is None:
         if st.button("Run Analysis"):
             with st.spinner(f"Running analysis for {selected_month}..."):
@@ -133,96 +133,58 @@ else:
                     {"role": "assistant", "content": result}
                 ]
 
-    # === Show Initial Output ===
+    # === Show Output, Follow-ups, Reset, and Export (only after analysis)
     if st.session_state.analysis_output:
         st.subheader(f"🧠 GPT Analysis for {selected_month}")
         st.markdown(st.session_state.analysis_output)
 
-    # === Follow-up Questions (max 3) ===
-    if st.session_state.followup_count < 3:
-        followup = st.text_input("Ask a follow-up question about the data", key=f"followup_input_{st.session_state.followup_count}")
-        if followup:
-            with st.spinner("Thinking..."):
-                preview_csv = "\n".join(st.session_state.csv_data.split("\n")[:11])
-                followup_prompt = f"""Reminder: this follow-up relates to the CSV data for {selected_month}:\n\n{preview_csv}\n\nQuestion: {followup}"""
-                st.session_state.conversation_history.append({"role": "user", "content": followup_prompt})
+        # === Follow-up Questions
+        if st.session_state.followup_count < 3:
+            followup = st.text_input("Ask a follow-up question about the data", key=f"followup_input_{st.session_state.followup_count}")
+            if followup:
+                with st.spinner("Thinking..."):
+                    preview_csv = "\n".join(st.session_state.csv_data.split("\n")[:11])
+                    followup_prompt = f"""Reminder: this follow-up relates to the CSV data for {selected_month}:\n\n{preview_csv}\n\nQuestion: {followup}"""
+                    st.session_state.conversation_history.append({"role": "user", "content": followup_prompt})
 
-                response = openai.chat.completions.create(
-                    model="gpt-4",
-                    messages=st.session_state.conversation_history,
-                    temperature=0.3,
-                    max_tokens=600
-                )
+                    response = openai.chat.completions.create(
+                        model="gpt-4",
+                        messages=st.session_state.conversation_history,
+                        temperature=0.3,
+                        max_tokens=600
+                    )
 
-                reply = response.choices[0].message.content
-                st.session_state.conversation_history.append({"role": "assistant", "content": reply})
-                st.session_state.followup_count += 1
+                    reply = response.choices[0].message.content
+                    st.session_state.conversation_history.append({"role": "assistant", "content": reply})
+                    st.session_state.followup_count += 1
 
-                st.markdown(f"#### 💬 GPT Reply #{st.session_state.followup_count}")
-                st.markdown(reply)
+                    st.markdown(f"#### 💬 GPT Reply #{st.session_state.followup_count}")
+                    st.markdown(reply)
 
-            st.experimental_rerun()
+                st.experimental_rerun()
 
-    elif st.session_state.followup_count >= 3:
-        st.info("🔒 Follow-up questions limit reached. Please click '🔁 Reset Analysis' to start over.")
+        elif st.session_state.followup_count >= 3:
+            st.info("🔒 Follow-up questions limit reached. Please click '🔁 Reset Analysis' to start over.")
 
-    # === Reset Button ===
-    if st.button("🔁 Reset Analysis"):
-        st.session_state.analysis_output = None
-        st.session_state.followup_count = 0
-        st.session_state.conversation_history = []
-        st.rerun()
+        # === Reset Button
+        if st.button("🔁 Reset Analysis"):
+            st.session_state.analysis_output = None
+            st.session_state.followup_count = 0
+            st.session_state.conversation_history = []
+            st.rerun()
 
-    # === Export to .docx ===
-    if st.button("📄 Export to .docx"):
-        doc = Document()
-        doc.add_heading(f"Marketing Analysis – {selected_month}", 0)
-        for msg in st.session_state.conversation_history:
-            role = msg["role"]
-            if role == "user":
-                doc.add_paragraph(f"User:\n{msg['content']}")
-            elif role == "assistant":
-                doc.add_paragraph(f"Kimbell Analysis:\n{msg['content']}")
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-        filename = f"Analysis_{selected_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-        st.download_button("📄 Download .docx File", data=buffer, file_name=filename, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-    # === Chart Section ===
-    st.markdown("---")
-    with st.expander("📈 Visualize Performance Metrics", expanded=True):
-        metric_options = ["Impressions", "Clicks", "Sessions", "Revenue"]
-        selected_metric = st.selectbox("Select Metric", options=metric_options)
-
-        metric_by_group = df.groupby("Campaign_Group")[selected_metric].sum().reset_index()
-        metric_by_group = metric_by_group[metric_by_group[selected_metric] > 0]
-
-        st.markdown(f"<h3 style='margin-bottom: 0.5rem;'>{selected_metric} by Campaign Group</h3>", unsafe_allow_html=True)
-
-        col1, col2 = st.columns([1, 2])
-
-        with col1:
-            fig_pie = go.Figure(data=[go.Pie(
-                labels=metric_by_group["Campaign_Group"],
-                values=metric_by_group[selected_metric],
-                hole=0.5,
-                textinfo="percent+label",
-                hoverinfo="skip",
-                showlegend=False
-            )])
-            fig_pie.update_layout(height=300, margin=dict(t=0, b=20))
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-        with col2:
-            fig_bar = px.bar(
-                df,
-                x="Channel",
-                y=selected_metric,
-                color="Campaign_Group",
-                barmode="group",
-                hover_data={selected_metric: ":,.0f"},
-                title=" "
-            )
-            fig_bar.update_layout(showlegend=False, yaxis_tickformat=",", height=300, margin=dict(t=0, b=20))
-            st.plotly_chart(fig_bar, use_container_width=True)
+        # === Export to .docx
+        if st.button("📄 Export to .docx"):
+            doc = Document()
+            doc.add_heading(f"Marketing Analysis – {selected_month}", 0)
+            for msg in st.session_state.conversation_history:
+                role = msg["role"]
+                if role == "user":
+                    doc.add_paragraph(f"User:\n{msg['content']}")
+                elif role == "assistant":
+                    doc.add_paragraph(f"Kimbell Analysis:\n{msg['content']}")
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            buffer.seek(0)
+            filename = f"Analysis_{selected_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            st.download_button("📄 Download .docx File", data=buffer, file_name=filename, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
