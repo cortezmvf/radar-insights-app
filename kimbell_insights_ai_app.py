@@ -8,6 +8,7 @@ import os
 import io
 import plotly.graph_objects as go
 import plotly.express as px
+import time 
 
 # === Setup ===
 st.title("📊 Monthly Marketing Analysis")
@@ -93,45 +94,37 @@ else:
                 csv_data = df.to_csv(index=False)
                 st.session_state.csv_data = csv_data
 
-                prompt = f"""
-                Here is the CSV data for {selected_month}:\n\n{csv_data}
+                assistant_id = "asst_lpwUYcZBCm6cUXQsfgWovZKO"
 
-                Please analyze this monthly marketing data and return structured insights using the format below:
+                # Create thread and store in session
+                thread = openai.beta.threads.create()
+                st.session_state.analysis_thread_id = thread.id
 
-                1. **Executive Summary (Overall)**: One paragraph summarizing good and bad performance across all campaign groups and channels. Derive total performance by aggregating all data — there is no 'Total' row.
-
-                2. **Campaign Group Insights**: One paragraph per campaign group, based on the '[Group] Subtotal' row. If the group is 'Membership', focus on YoY changes. For all others, focus on MoM changes. Mention only performance changes above 5% and the channels responsible.
-
-                3. **Channel Breakdown** (within each group): For each channel:
-                - Two pros (what performed well)
-                - Two cons (areas for improvement)
-                Focus on strategic opportunities, media mix efficiency, and performance insights.
-
-                Additional Guidelines:
-                - Do not assume missing data.
-                - Use only the data provided. Do not hallucinate numbers.
-                - Use MoM and YoY media spend % change to infer performance impact (spend values are not present).
-                - Write with a professional, concise, and data-driven tone.
-                - Follow the format strictly.
-                """
-
-                response = openai.chat.completions.create(
-                    model="gpt-4",
-                    messages=[
-                        {"role": "system", "content": system_message},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.2,
-                    max_tokens=1500
+                openai.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=f"Here is the CSV data for {selected_month}:\n\n{csv_data}\n\nPlease run the monthly marketing analysis."
                 )
 
-                result = response.choices[0].message.content
+                run = openai.beta.threads.runs.create(
+                    thread_id=thread.id,
+                    assistant_id=assistant_id
+                )
+
+                while run.status not in ["completed", "failed", "cancelled"]:
+                    time.sleep(1)
+                    run = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+
+                messages = openai.beta.threads.messages.list(thread_id=thread.id)
+                result = messages.data[0].content[0].text.value
+
                 st.session_state.analysis_output = result
                 st.session_state.conversation_history = [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": f"(CSV data submitted for {selected_month})"},
                     {"role": "assistant", "content": result}
                 ]
+
+
 
     # === Show Output, Follow-ups, Reset, and Export (only after analysis)
     if st.session_state.analysis_output:
@@ -150,14 +143,27 @@ else:
                     followup_prompt = f"""Reminder: this follow-up relates to the CSV data for {selected_month}:\n\n{preview_csv}\n\nQuestion: {followup}"""
                     st.session_state.conversation_history.append({"role": "user", "content": followup_prompt})
 
-                    response = openai.chat.completions.create(
-                        model="gpt-4",
-                        messages=st.session_state.conversation_history,
-                        temperature=0.3,
-                        max_tokens=600
+                    openai.beta.threads.messages.create(
+                        thread_id=st.session_state.analysis_thread_id,
+                        role="user",
+                        content=followup_prompt
                     )
 
-                    reply = response.choices[0].message.content
+                    followup_run = openai.beta.threads.runs.create(
+                        thread_id=st.session_state.analysis_thread_id,
+                        assistant_id=assistant_id
+                    )
+
+                    while followup_run.status not in ["completed", "failed", "cancelled"]:
+                        time.sleep(1)
+                        followup_run = openai.beta.threads.runs.retrieve(
+                            thread_id=st.session_state.analysis_thread_id,
+                            run_id=followup_run.id
+                        )
+
+                    followup_messages = openai.beta.threads.messages.list(thread_id=st.session_state.analysis_thread_id)
+                    reply = followup_messages.data[0].content[0].text.value
+
                     st.session_state.conversation_history.append({"role": "assistant", "content": reply})
                     st.session_state.followup_count += 1
 
