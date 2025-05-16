@@ -135,6 +135,9 @@ else:
 
     # === Show Output, Follow-ups, Reset, and Export (only after analysis)
     if st.session_state.analysis_output:
+        if st.session_state.get("rerun_requested"):
+            del st.session_state.rerun_requested
+            st.experimental_rerun()
         st.subheader(f"🧠 GPT Analysis for {selected_month}")
         st.markdown(st.session_state.analysis_output)
 
@@ -159,7 +162,8 @@ else:
                     st.session_state.followup_count += 1
 
                     st.session_state.last_reply = f"#### 💬 GPT Reply #{st.session_state.followup_count}\n\n{reply}"
-                    st.experimental_rerun()
+                    st.session_state.rerun_requested = True
+                    st.stop()
 
         elif st.session_state.followup_count >= 3:
             st.info("🔒 Follow-up questions limit reached. Please click '🔁 Reset Analysis' to start over.")
