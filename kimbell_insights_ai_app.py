@@ -5,58 +5,19 @@ from docx import Document
 from datetime import datetime
 import openai
 import os
+import io
+import plotly.graph_objects as go
+import plotly.express as px
 
-# Setup
+# === Setup ===
+st.title("📊 Monthly Marketing Analysis")
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 project_id = "radar-377104"
 with open("gcp_key.json", "w") as f:
     f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS"])
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
 
-# === Define system message globally so it's always available ===
-system_message = """RADaR Analysis is a marketing consultant GPT that analyzes monthly marketing data provided by users in CSV format and generates structured insights based on a specific format. It follows a data-driven approach, identifying trends, key performance indicators (KPIs), and actionable recommendations.
-
-### Data Structure:
-The CSV file contains the following columns: Campaign Group, Channel, Impressions, Clicks, CTR, Sessions, Revenue, and Month-over-Month (MoM) and Year-over-Year (YoY) comparisons for these KPIs. 
-- **Media spend dollar amounts will not be provided and should not be included in the output.**
-- **MoM and YoY media spend changes are included and should be analyzed.**
-- **A change in media spend is likely to impact impressions and clicks, which should be taken into account.**
-
-### Insight Format:
-1. **Executive Summary (Overall):**
-   - A paragraph summarizing the good and bad performance for all campaign groups and channels.
-   - Uses the 'Total' row in the CSV for overall performance analysis.
-   - Considers marketing strategy, channel mix, and real-world marketing knowledge in the assessment.
-
-2. **Campaign Group Insights (One section per campaign group):**
-   - Named dynamically based on the campaign group name.
-   - Includes a high-level executive summary written as a paragraph, focusing on the '[Campaign Group] Subtotal' row.
-   - If the campaign group is 'Membership,' focuses on YoY performance.
-   - For other campaign groups, focuses on MoM performance.
-   - Mentions only performance changes above 5%, highlighting specific channels driving the changes.
-   - Recognizes the relationship between media spend shifts and impressions/clicks.
-
-3. **Channel Breakdown (Under each Campaign Group Section):**
-   - Lists each individual channel within the campaign group.
-   - Provides three bullet points per channel:
-     - Two pros (what went well).
-     - Two cons (what could be improved).
-   - Considers marketing best practices, channel mix efficiency, and strategic opportunities.
-
-4. **Additional Campaign Group Sections:**
-   - Follows the same structure as above for each additional campaign group in the file.
-
-### Additional Notes:
-- Kimbell Analysis strictly follows this hierarchy and structure.
-- The Executive Summary and each Campaign Group's Executive Summary must be written as paragraphs, not bullet points.
-- It does not assume missing data but will ask the user for clarification if needed.
-- The tone is professional, concise, and strategic, avoiding unnecessary elaboration.
-- Insights are based on quantitative evidence, with a focus on metrics-based conclusions.
-- Uses real-world marketing expertise to assess strategy, channel performance, and market trends beyond just numerical analysis.
-- Can also provide general marketing strategies, industry benchmarks, and best practices upon request.
-"""
-
-st.title("📊 Monthly Marketing Analysis")
+system_message = "You are a strategic marketing insights assistant. Follow all formatting and analytical instructions in the user prompt."
 
 # === Session State Setup ===
 if "analysis_output" not in st.session_state:
@@ -67,57 +28,87 @@ if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
 # === Month Selector ===
-month_options = ["2025-01","2025-02","2025-03", "2025-04"]  # Extend if needed
+month_options = ["2025-01", "2025-02", "2025-03", "2025-04"]
 selected_month = st.selectbox("Select Month for Analysis", options=month_options)
 
-# === Run Analysis Button ===
-if st.session_state.analysis_output is None:
-    if st.button("Run Analysis"):
-        with st.spinner(f"Running analysis for {selected_month}..."):
+# === Load Data from GBQ ===
+@st.cache_data(ttl=3600)
+def load_data(month):
+    client = bigquery.Client(project=project_id)
+    query = f"""
+        SELECT * 
+        FROM `radar-377104.Schaefer_Kimbell.ai_insights_monthly_table`
+        WHERE Month_String = '{month}'
+    """
+    return client.query(query).to_dataframe()
 
-            # --- BigQuery ---
-            query = f"""
-            SELECT * 
-            FROM `radar-377104.Schaefer_Kimbell.ai_insights_monthly_table`
-            WHERE Month_String = '{selected_month}'
-            """
-            client = bigquery.Client(project=project_id)
-            df = client.query(query).to_dataframe()
-            csv_data = df.to_csv(index=False)
+df = load_data(selected_month)
 
-            # --- GPT Analysis ---
-            prompt = f"""Here is the CSV data for {selected_month}:\n\n{csv_data}\n\nPlease generate the structured insights as instructed."""
+if df.empty:
+    st.warning("No data returned for the selected month.")
+elif "Campaign_Group" not in df.columns or "Spend" not in df.columns:
+    st.error("Required columns ('Campaign_Group', 'Spend') not found in the data.")
+else:
+    # --- GPT Analysis ---
+    if st.session_state.analysis_output is None:
+        if st.button("Run Analysis"):
+            with st.spinner(f"Running analysis for {selected_month}..."):
+                csv_data = df.to_csv(index=False)
+                st.session_state.csv_data = csv_data
 
-            response = openai.chat.completions.create(
-                model="gpt-4",
-                messages=[
+                prompt = f"""
+                Here is the CSV data for {selected_month}:\n\n{csv_data}
+
+                Please analyze this monthly marketing data and return structured insights using the format below:
+
+                1. **Executive Summary (Overall)**: One paragraph summarizing good and bad performance across all campaign groups and channels. Derive total performance by aggregating all data — there is no 'Total' row.
+
+                2. **Campaign Group Insights**: One paragraph per campaign group, based on the '[Group] Subtotal' row. If the group is 'Membership', focus on YoY changes. For all others, focus on MoM changes. Mention only performance changes above 5% and the channels responsible.
+
+                3. **Channel Breakdown** (within each group): For each channel:
+                - Two pros (what performed well)
+                - Two cons (areas for improvement)
+                Focus on strategic opportunities, media mix efficiency, and performance insights.
+
+                Additional Guidelines:
+                - Do not assume missing data.
+                - Use only the data provided. Do not hallucinate numbers.
+                - Use MoM and YoY media spend % change to infer performance impact (spend values are not present).
+                - Write with a professional, concise, and data-driven tone.
+                - Follow the format strictly.
+                """
+
+                response = openai.chat.completions.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.2,
+                    max_tokens=1500
+                )
+
+                result = response.choices[0].message.content
+                st.session_state.analysis_output = result
+                st.session_state.conversation_history = [
                     {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=1500
-            )
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": result}
+                ]
 
-            result = response.choices[0].message.content
-            st.session_state.analysis_output = result
-            st.session_state.conversation_history = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": result}
-            ]
+    # === Show Initial Output ===
+    if st.session_state.analysis_output:
+        st.subheader(f"🧠 GPT Analysis for {selected_month}")
+        st.markdown(st.session_state.analysis_output)
 
-# === Show Initial Output ===
-if st.session_state.analysis_output:
-    st.subheader(f"🧠 GPT Analysis for {selected_month}")
-    st.markdown(st.session_state.analysis_output)
-
-    # === Follow-up questions (up to 3) ===
+    # === Follow-up Questions (max 3) ===
     if st.session_state.followup_count < 3:
-        followup = st.text_input("Ask a follow-up question about the data", key=f"followup_{st.session_state.followup_count}")
-
+        followup = st.text_input("Ask a follow-up question about the data", key=f"followup_input_{st.session_state.followup_count}")
         if followup:
             with st.spinner("Thinking..."):
-                st.session_state.conversation_history.append({"role": "user", "content": followup})
+                preview_csv = "\n".join(st.session_state.csv_data.split("\n")[:11])
+                followup_prompt = f"""Reminder: this follow-up relates to the CSV data for {selected_month}:\n\n{preview_csv}\n\nQuestion: {followup}"""
+                st.session_state.conversation_history.append({"role": "user", "content": followup_prompt})
 
                 response = openai.chat.completions.create(
                     model="gpt-4",
@@ -128,40 +119,73 @@ if st.session_state.analysis_output:
 
                 reply = response.choices[0].message.content
                 st.session_state.conversation_history.append({"role": "assistant", "content": reply})
-
                 st.session_state.followup_count += 1
+
                 st.markdown(f"#### 💬 GPT Reply #{st.session_state.followup_count}")
                 st.markdown(reply)
-# === Final action buttons ===
-if st.button("🔁 Reset Analysis"):
-    st.session_state.analysis_output = None
-    st.session_state.followup_count = 0
-    st.session_state.conversation_history = []
-    st.rerun()
 
-from io import BytesIO
-from docx import Document
-from datetime import datetime
+            st.experimental_rerun()
 
-if st.button("📄 Export to .docx"):
-    doc = Document()
-    doc.add_heading(f"Marketing Analysis – {selected_month}", 0)
+    elif st.session_state.followup_count >= 3:
+        st.info("🔒 Follow-up questions limit reached. Please click '🔁 Reset Analysis' to start over.")
 
-    for msg in st.session_state.conversation_history:
-        role = msg["role"]
-        if role == "user":
-            doc.add_paragraph(f"User:\n{msg['content']}")
-        elif role == "assistant":
-            doc.add_paragraph(f"Kimbell Analysis:\n{msg['content']}")
+    # === Reset Button ===
+    if st.button("🔁 Reset Analysis"):
+        st.session_state.analysis_output = None
+        st.session_state.followup_count = 0
+        st.session_state.conversation_history = []
+        st.rerun()
 
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
+    # === Export to .docx ===
+    if st.button("📄 Export to .docx"):
+        doc = Document()
+        doc.add_heading(f"Marketing Analysis – {selected_month}", 0)
+        for msg in st.session_state.conversation_history:
+            role = msg["role"]
+            if role == "user":
+                doc.add_paragraph(f"User:\n{msg['content']}")
+            elif role == "assistant":
+                doc.add_paragraph(f"Kimbell Analysis:\n{msg['content']}")
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        filename = f"Analysis_{selected_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        st.download_button("📄 Download .docx File", data=buffer, file_name=filename, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-    filename = f"Analysis_{selected_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-    st.download_button(
-        label="📄 Download .docx File",
-        data=buffer,
-        file_name=filename,
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    # === Chart Section ===
+    st.markdown("---")
+    with st.expander("📈 Visualize Performance Metrics", expanded=True):
+        metric_options = ["Impressions", "Clicks", "Sessions", "Revenue"]
+        selected_metric = st.selectbox("Select Metric", options=metric_options)
+
+        metric_by_group = df.groupby("Campaign_Group")[selected_metric].sum().reset_index()
+        metric_by_group = metric_by_group[metric_by_group[selected_metric] > 0]
+
+        st.markdown(f"<h3 style='margin-bottom: 0.5rem;'>{selected_metric} by Campaign Group</h3>", unsafe_allow_html=True)
+
+        col1, col2 = st.columns([1, 2])
+
+        with col1:
+            fig_pie = go.Figure(data=[go.Pie(
+                labels=metric_by_group["Campaign_Group"],
+                values=metric_by_group[selected_metric],
+                hole=0.5,
+                textinfo="percent+label",
+                hoverinfo="skip",
+                showlegend=False
+            )])
+            fig_pie.update_layout(height=300, margin=dict(t=0, b=20))
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        with col2:
+            fig_bar = px.bar(
+                df,
+                x="Channel",
+                y=selected_metric,
+                color="Campaign_Group",
+                barmode="group",
+                hover_data={selected_metric: ":,.0f"},
+                title=" "
+            )
+            fig_bar.update_layout(showlegend=False, yaxis_tickformat=",", height=300, margin=dict(t=0, b=20))
+            st.plotly_chart(fig_bar, use_container_width=True)
