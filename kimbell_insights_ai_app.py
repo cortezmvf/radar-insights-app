@@ -158,19 +158,22 @@ else:
                     st.session_state.conversation_history.append({"role": "assistant", "content": reply})
                     st.session_state.followup_count += 1
 
-                    st.markdown(f"#### 💬 GPT Reply #{st.session_state.followup_count}")
-                    st.markdown(reply)
-
-                st.experimental_rerun()
+                    st.session_state.last_reply = f"#### 💬 GPT Reply #{st.session_state.followup_count}\n\n{reply}"
+                    st.experimental_rerun()
 
         elif st.session_state.followup_count >= 3:
             st.info("🔒 Follow-up questions limit reached. Please click '🔁 Reset Analysis' to start over.")
+
+        if "last_reply" in st.session_state:
+            st.markdown(st.session_state.last_reply)
 
         # === Reset Button
         if st.button("🔁 Reset Analysis"):
             st.session_state.analysis_output = None
             st.session_state.followup_count = 0
             st.session_state.conversation_history = []
+            st.session_state.last_reply = None
+            st.session_state.csv_data = None
             st.rerun()
 
         # === Export to .docx
