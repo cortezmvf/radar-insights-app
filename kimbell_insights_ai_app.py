@@ -14,6 +14,10 @@ import time
 st.title("📊 Monthly Marketing Analysis")
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 project_id = "radar-377104"
+
+# Define your Assistant ID globally so both Run Analysis and follow-ups can use it
+assistant_id = "asst_lpwUYcZBCm6cUXQsfgWovZKO"
+
 with open("gcp_key.json", "w") as f:
     f.write(st.secrets["GOOGLE_APPLICATION_CREDENTIALS"])
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
@@ -93,8 +97,6 @@ else:
             with st.spinner(f"Running analysis for {selected_month}..."):
                 csv_data = df.to_csv(index=False)
                 st.session_state.csv_data = csv_data
-
-                assistant_id = "asst_lpwUYcZBCm6cUXQsfgWovZKO"
 
                 # Create thread and store in session
                 thread = openai.beta.threads.create()
