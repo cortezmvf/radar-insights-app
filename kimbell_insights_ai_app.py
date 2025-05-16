@@ -27,9 +27,14 @@ if "followup_count" not in st.session_state:
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-# === Month Selector ===
+# === Month and Metric Selectors ===
 month_options = ["2025-01", "2025-02", "2025-03", "2025-04"]
-selected_month = st.selectbox("Select Month for Analysis", options=month_options)
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    selected_month = st.selectbox("Select Month", options=month_options)
+with col_b:
+    metric_options = ["Impressions", "Clicks", "Sessions", "Revenue"]
+    selected_metric = st.selectbox("Select Metric", options=metric_options)
 
 # === Load Data from GBQ ===
 @st.cache_data(ttl=3600)
@@ -49,6 +54,38 @@ if df.empty:
 elif "Campaign_Group" not in df.columns or "Spend" not in df.columns:
     st.error("Required columns ('Campaign_Group', 'Spend') not found in the data.")
 else:
+    # === Chart Section ===
+    metric_by_group = df.groupby("Campaign_Group")[selected_metric].sum().reset_index()
+    metric_by_group = metric_by_group[metric_by_group[selected_metric] > 0]
+
+    st.markdown(f"<h3 style='margin-bottom: 0.5rem;'>{selected_metric} by Campaign Group</h3>", unsafe_allow_html=True)
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=metric_by_group["Campaign_Group"],
+            values=metric_by_group[selected_metric],
+            hole=0.5,
+            textinfo="percent+label",
+            hoverinfo="skip",
+            showlegend=False
+        )])
+        fig_pie.update_layout(height=300, margin=dict(t=0, b=20))
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with col2:
+        fig_bar = px.bar(
+            df,
+            x="Channel",
+            y=selected_metric,
+            color="Campaign_Group",
+            barmode="group",
+            hover_data={selected_metric: ":,.0f"},
+            title=" "
+        )
+        fig_bar.update_layout(showlegend=False, yaxis_tickformat=",", height=300, margin=dict(t=0, b=20))
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
     # --- GPT Analysis ---
     if st.session_state.analysis_output is None:
         if st.button("Run Analysis"):
